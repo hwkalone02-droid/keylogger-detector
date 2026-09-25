@@ -1,0 +1,38 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Demo — Safe network-ish pattern</title>
+  <style>body{font-family:Arial;padding:24px;background:#fff7f7} .card{max-width:680px;margin:0 auto;background:#fff;padding:18px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}</style>
+</head>
+<body>
+  <div class="card">
+    <h2>Safe demo — network-ish tokens</h2>
+    <p>Contains markers like <code>fetch(</code> and <code>navigator.sendBeacon</code> as text to trigger static rules. No real network exfiltration.</p>
+    <label>Password: <input id="pw" type="password"></label>
+  </div>
+
+  <script>
+    // runtime hook (SAFE)
+    (function(){
+      function hook(e){
+        if(window && typeof window.simulatedKeyEventMarker === 'function'){
+          window.simulatedKeyEventMarker('demo2-keyhook');
+        }
+      }
+      document.querySelectorAll('input').forEach(el => el.addEventListener('keypress', hook, {passive:true}));
+      document._demo2 = true;
+    })();
+
+    // static tokens to trigger "network call" heuristic (kept as strings/comment)
+    // Example tokens: "fetch(", "XMLHttpRequest(", "navigator.sendBeacon("
+    const NETWORK_TOKENS = "fetch( XMLHttpRequest( navigator.sendBeacon(";
+
+    // Provide a NO-OP stub with the same name as a network function — safe stub:
+    function fetchFake(url, opts){
+      // no-op: intentionally not calling real fetch
+      return Promise.resolve({ok:false, status:0});
+    }
+  </script>
+</body>
+</html>

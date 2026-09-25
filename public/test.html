@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Website Threat Scanner</title>
+<style>
+  body { font-family: Arial, sans-serif; background:#111; color:#eee; text-align:center; padding:20px; }
+  input { width: 70%; padding: 8px; border-radius: 6px; border:none; }
+  button { padding: 8px 16px; border:none; border-radius:6px; margin-left:10px; cursor:pointer; background:#007bff; color:white; }
+  .result { margin-top:20px; font-size:18px; font-weight:bold; }
+  .safe { color:#00ff00; }
+  .suspicious { color:#ffa500; }
+  .malicious { color:#ff4444; }
+</style>
+</head>
+<body>
+  <h2>🔎 Website Threat Scanner</h2>
+  <input id="urlInput" type="text" placeholder="Enter website URL (https://...)"/>
+  <button onclick="checkSite()">Check</button>
+  <div class="result" id="result"></div>
+
+<script>
+async function checkSite() {
+  const url = document.getElementById("urlInput").value.trim();
+  if (!url) { alert("Enter a valid URL"); return; }
+  const resultBox = document.getElementById("result");
+  resultBox.textContent = "Scanning...";
+  resultBox.className = "result";
+
+  let verdicts = [];
+
+  // Simple reputation sources with fallback proxy
+  const proxy = "https://api.allorigins.win/get?url=";
+
+  try {
+    // 1. PhishTank
+    let res1 = await fetch(proxy + encodeURIComponent("https://checkurl.phishtank.com/checkurl/?url=" + url + "&format=json"));
+    let data1 = await res1.json();
+    if (data1 && data1.contents && data1.contents.includes("true")) verdicts.push("PhishTank: Malicious");
+    else verdicts.push("PhishTank: Safe/Unknown");
+  } catch { verdicts.push("PhishTank: Suspicious"); }
+
+  try {
+    // 2. OTX (AlienVault Open Threat Exchange pulse API)
+    let res2 = await fetch(proxy + encodeURIComponent("https://otx.alienvault.com/api/v1/indicators/url/" + encodeURIComponent(url) + "/general"));
+    let data2 = await res2.json();
+    if (data2.contents && data2.contents.includes("malicious")) verdicts.push("OTX: Malicious");
+    else verdicts.push("OTX: Safe/Unknown");
+  } catch { verdicts.push("OTX: Suspicious"); }
+
+  try {
+    // 3. Google Transparency Report alternative
+    let res3 = await fetch(proxy + encodeURIComponent("https://transparencyreport.google.com/safe-browsing/search?url=" + url));
+    let data3 = await res3.json();
+    if (data3 && data3.contents && data3.contents.includes("unsafe")) verdicts.push("Google: Malicious");
+    else verdicts.push("Google: Safe/Unknown");
+  } catch { verdicts.push("Google: Suspicious"); }
+
+  // Final decision
+  let text = verdicts.join(" | ");
+  if (text.includes("Malicious")) {
+    resultBox.textContent = "🚨 Malicious - " + text;
+    resultBox.classList.add("malicious");
+  } else if (text.includes("Suspicious")) {
+    resultBox.textContent = "⚠️ Suspicious - " + text;
+    resultBox.classList.add("suspicious");
+  } else {
+    resultBox.textContent = "✅ Safe - " + text;
+    resultBox.classList.add("safe");
+  }
+}
+</script>
+</body>
+</html>

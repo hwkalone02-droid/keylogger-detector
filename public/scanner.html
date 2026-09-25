@@ -1,0 +1,506 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>KeyWatch — Scanner & Runtime Monitor</title>
+  <style>
+    :root{--bg:#081425;--card:#0b1220;--muted:#9fb0c8;--accent:#7c3aed;--good:#10b981;--warn:#f59e0b;--bad:#ef4444}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;background:linear-gradient(180deg,#04101a,#061426);color:#e6eef8;min-height:100vh}
+    .wrap{max-width:1100px;margin:28px auto;padding:18px}
+    header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px}
+    h1{margin:0;font-size:20px}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.04);padding:18px;border-radius:12px}
+    .grid{display:grid;grid-template-columns:1fr 420px;gap:18px;margin-top:14px}
+    .panel{padding:12px;border-radius:10px;background:rgba(255,255,255,0.02)}
+    .controls{display:flex;gap:8px;align-items:center}
+    button{border:0;padding:8px 12px;border-radius:8px;font-weight:700;cursor:pointer}
+    .btn-primary{background:linear-gradient(90deg,var(--accent),#5b21b6);color:white}
+    .btn-ghost{background:transparent;color:var(--accent);border:1px solid rgba(124,58,237,0.12)}
+    .table{width:100%;border-collapse:collapse;margin-top:8px}
+    .table th,.table td{padding:8px;border-bottom:1px solid rgba(255,255,255,0.03);font-size:13px;text-align:left}
+    .score{font-weight:800;padding:6px 8px;border-radius:8px}
+    .score.good{background:rgba(16,185,129,0.06);color:var(--good)}
+    .score.warn{background:rgba(245,158,11,0.06);color:var(--warn)}
+    .score.bad{background:rgba(239,68,68,0.06);color:var(--bad)}
+    .timeline{max-height:360px;overflow:auto;margin-top:8px}
+    .event{padding:8px;border-radius:8px;margin-bottom:8px;background:rgba(255,255,255,0.01);font-size:13px}
+    .muted{color:var(--muted);font-size:13px}
+    .badge{font-size:12px;padding:6px 8px;border-radius:999px;background:rgba(255,255,255,0.02);display:inline-block}
+    .mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, 'Roboto Mono', monospace;font-size:12px}
+    .small{font-size:12px;color:var(--muted)}
+    .inputRow{display:flex;gap:8px;align-items:center;margin-top:8px}
+    input[type=text]{padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit;min-width:320px}
+    @media (max-width:980px){.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>KeyWatch — Scanner & Runtime Monitor</h1>
+        <div class="muted small">Static + Runtime detection • Demo-safe simulated injection</div>
+      </div>
+      <div class="controls">
+        <button id="injectBtn" class="btn-primary">Inject simulated keylogger</button>
+        <button id="clearBtn" class="btn-ghost">Clear timeline</button>
+      </div>
+    </header>
+
+    <div class="card">
+      <div class="grid">
+        <!-- left: static scan results & scripts list -->
+        <section class="panel">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <h3 style="margin:0 0 8px 0">Static Scan — Loaded Scripts</h3>
+            <div class="small muted" id="scanningNote"></div>
+          </div>
+
+          <div class="inputRow">
+            <input id="targetUrl" type="text" placeholder="Target URL (optional) - leave blank to scan this page)" />
+            <button id="runScan" class="btn-ghost">Run Static Scan</button>
+            <button id="scanProxy" class="btn-ghost">Run via proxy</button>
+          </div>
+
+          <div class="muted small" style="margin-top:8px">This scan checks script text and page HTML for suspicious tokens (heuristics). Some external scripts may be blocked by CORS — use proxy for those.</div>
+
+          <table class="table" id="scriptsTable" aria-live="polite">
+            <thead>
+              <tr>
+                <th style="width:55%">Script</th>
+                <th>Matches</th>
+                <th>Score</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="scriptsBody">
+              <!-- filled by JS -->
+            </tbody>
+          </table>
+
+        </section>
+
+        <!-- right: timeline / details -->
+        <aside class="panel">
+          <h3 style="margin-top:0">Real-time Timeline</h3>
+          <div class="muted small">Events detected by the runtime monitor. Click "Inspect" to view more.</div>
+          <div class="timeline" id="timeline"></div>
+
+          <div style="margin-top:12px" id="detailPanel" class="muted small mono"></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  /************************************************************************
+   * scanner.html — KeyWatch
+   * - Reads localStorage.scan_target_url (set by search.html) and pre-fills.
+   * - Can fetch target page HTML (direct or via proxy) and run static heuristics.
+   * - Runtime detector active for the current page (MutationObserver + patched addEventListener).
+   * - Safe simulated injection button for demo.
+   ************************************************************************/
+
+  // ---------- Config & static rules ----------
+  const TIMELINE_KEY = 'keywatch_timeline_v1';
+  const STATIC_RULES = [
+    {id:'key-listener', label:"key event token", re:/(addEventListener\s*\(\s*['"]key(down|up|press)['"]|onkeydown\s*=|onkeypress\s*=)/i, weight:25},
+    {id:'key-props', label:"key property", re:/(keyCode|which|e\.key)/i, weight:15},
+    {id:'network', label:"network call", re:/(fetch\s*\(|XMLHttpRequest\s*\(|navigator\.sendBeacon\()/i, weight:20},
+    {id:'eval', label:"dynamic eval", re:/(eval\s*\(|new Function\()/i, weight:30}
+  ];
+
+  // ---------- Utilities ----------
+  function readTimeline(){ try{ return JSON.parse(localStorage.getItem(TIMELINE_KEY)||'[]') }catch(e){return[]} }
+  function writeTimeline(t){ localStorage.setItem(TIMELINE_KEY, JSON.stringify(t)); }
+  function pushEvent(evt){
+    evt.ts = Date.now();
+    const t = readTimeline();
+    t.unshift(evt);
+    writeTimeline(t);
+    renderTimeline();
+    console.warn('KeyWatch: event', evt);
+  }
+
+  function el(id){ return document.getElementById(id); }
+  const scriptsBody = el('scriptsBody');
+  const timelineEl = el('timeline');
+  const detailPanel = el('detailPanel');
+  const targetUrlInput = el('targetUrl');
+  const scanningNote = el('scanningNote');
+
+  function humanTime(ts){ return new Date(ts).toLocaleString(); }
+  function scoreClass(score){
+    if(score >= 66) return 'bad';
+    if(score >= 31) return 'warn';
+    return 'good';
+  }
+
+  // ---------- renderers ----------
+  function renderScripts(list){
+    scriptsBody.innerHTML = '';
+    if(list.length === 0){
+      scriptsBody.innerHTML = '<tr><td colspan="4" class="muted">No scripts found or no scan run yet.</td></tr>';
+      return;
+    }
+    list.forEach(s => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="mono">${s.name || s.url || '[inline script]'}</td>
+        <td>${s.matches.length ? s.matches.join(', ') : '<span class="muted">none</span>'}</td>
+        <td><span class="score ${scoreClass(s.score)}">${s.score}</span></td>
+        <td><button class="btn-ghost inspect" data-id="${s.id}">Inspect</button></td>
+      `;
+      scriptsBody.appendChild(tr);
+    });
+    Array.from(document.querySelectorAll('.inspect')).forEach(btn=>{
+      btn.addEventListener('click', e=>{
+        const id = e.currentTarget.dataset.id;
+        const s = list.find(x=>x.id===id);
+        if(s) showDetail(s);
+      });
+    });
+  }
+
+  function renderTimeline(){
+    const items = readTimeline();
+    timelineEl.innerHTML = '';
+    if(items.length === 0){
+      timelineEl.innerHTML = '<div class="muted small">No events yet. Use Inject simulated keylogger to demo detection on this page.</div>';
+      return;
+    }
+    items.forEach((ev, idx)=>{
+      const div = document.createElement('div');
+      div.className = 'event';
+      div.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
+          <div><strong>${ev.reason}</strong> <span class="small muted">• ${humanTime(ev.ts)}</span></div>
+          <div><span class="badge">${ev.severity || 'info'}</span></div>
+        </div>
+        <div class="small mono" style="margin-top:6px">${ev.snippet || ev.detail || ''}</div>
+        <div style="margin-top:6px"><button class="btn-ghost inspectEvt" data-idx="${idx}">Inspect</button> <button class="btn-ghost mitigateEvt" data-idx="${idx}">Mitigate</button></div>
+      `;
+      timelineEl.appendChild(div);
+    });
+
+    Array.from(document.querySelectorAll('.inspectEvt')).forEach(b=>{
+      b.addEventListener('click', e=>{
+        const idx = +e.currentTarget.dataset.idx;
+        const ev = readTimeline()[idx];
+        detailPanel.textContent = JSON.stringify(ev, null, 2);
+      });
+    });
+    Array.from(document.querySelectorAll('.mitigateEvt')).forEach(b=>{
+      b.addEventListener('click', e=>{
+        const idx = +e.currentTarget.dataset.idx;
+        markMitigated(idx);
+      });
+    });
+  }
+
+  function showDetail(s){
+    detailPanel.textContent = JSON.stringify(s, null, 2);
+  }
+
+  function markMitigated(idx){
+    const t = readTimeline();
+    if(!t[idx]) return;
+    t[idx].mitigated = true;
+    writeTimeline(t);
+    renderTimeline();
+    detailPanel.textContent = 'Mitigated: ' + JSON.stringify(t[idx], null, 2);
+  }
+
+  // ---------- Static scanning helpers ----------
+  function getScriptNodesFromHtml(html, baseUrl){
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const scripts = Array.from(doc.querySelectorAll('script'));
+    return scripts.map((s,i)=>({
+      id: 's'+i,
+      src: s.src || null,
+      inline: !s.src,
+      text: s.textContent || '',
+      name: s.src ? (new URL(s.src, baseUrl)).href : 'inline-script'
+    }));
+  }
+
+  async function fetchHtml(url, viaProxy=false){
+    // If scanning remote and proxy path is different, change proxyURL accordingly
+    if(viaProxy){
+      // default proxy location for demo; change if your proxy runs elsewhere
+      const proxy = 'http://localhost:3000/proxy?url=' + encodeURIComponent(url);
+      const res = await fetch(proxy);
+      if(!res.ok) throw new Error('Proxy fetch failed: ' + res.status);
+      return await res.text();
+    }else{
+      const res = await fetch(url, {mode:'cors'});
+      if(!res.ok) throw new Error('Fetch failed: ' + res.status);
+      return await res.text();
+    }
+  }
+
+  async function analyzeHtml(html, baseUrl, usedProxy){
+    scanningNote.textContent = 'Rendering results...';
+    const scripts = getScriptNodesFromHtml(html, baseUrl);
+
+    // page-level scan
+    const pageMatches = [];
+    let pageScore = 0;
+    STATIC_RULES.forEach(rule=>{
+      if(rule.re.test(html)){
+        pageMatches.push(rule.label);
+        pageScore += rule.weight;
+      }
+    });
+
+    const results = [];
+    for(const s of scripts){
+      let text = s.text || '';
+      if(s.src){
+        try{
+          // try to fetch external script (resolve relative urls)
+          const resolved = s.name;
+          if(usedProxy){
+            const r = await fetch('http://localhost:3000/proxy?url=' + encodeURIComponent(resolved));
+            if(r.ok) text = await r.text();
+          }else{
+            const r = await fetch(resolved, {mode:'cors'});
+            if(r.ok) text = await r.text();
+            else text = '';
+          }
+        }catch(e){
+          text = '';
+        }
+      }
+      const matches = [];
+      let score = 0;
+      STATIC_RULES.forEach(rule=>{
+        if(rule.re.test(text || '')){
+          matches.push(rule.label);
+          score += rule.weight;
+        }
+      });
+      results.push({id:s.id, url:s.src, name:s.name, matches, score: Math.min(100, score), snippet: (text||'').slice(0,280)});
+    }
+
+    // Combine and render
+    const totalScore = Math.min(100, pageScore + results.reduce((a,b)=>a+b.score,0));
+    // Show page summary in scanningNote
+    scanningNote.textContent = `Page heuristic score: ${totalScore} ${usedProxy ? '(via proxy)' : ''}`;
+
+    // If page-level matches exist, prepend them as a pseudo-script
+    const renderList = [];
+    if(pageMatches.length) renderList.push({id:'page', name:'(page-level HTML)', matches:pageMatches, score: Math.min(100,pageScore), snippet: html.slice(0,300)});
+    renderScripts(renderList.concat(results));
+  }
+
+  // ---------- Runtime detector (MutationObserver + addEventListener wrapper) ----------
+  (function runtimeDetector(){
+    window.KeyWatch = window.KeyWatch || {};
+    window.KeyWatch.reportSuspicious = function(details){
+      details.severity = details.severity || computeSeverity(details);
+      pushEvent(details);
+    };
+
+    function computeSeverity(details){
+      if(!details) return 'info';
+      const r = String(details.reason||'').toLowerCase();
+      if(r.includes('network') || r.includes('exfil') || r.includes('fetch')) return 'critical';
+      if(r.includes('keydown') || r.includes('addEventListener')) return 'warning';
+      return 'info';
+    }
+
+    try{
+      const observer = new MutationObserver(muts=>{
+        muts.forEach(m=>{
+          if(m.addedNodes && m.addedNodes.length){
+            m.addedNodes.forEach(n=>{
+              if(n.tagName === 'SCRIPT'){
+                const txt = (n.textContent||'').slice(0,400);
+                if(/(addEventListener\(|onkeydown|onkeyup|onkeypress|keyCode)/i.test(txt)){
+                  window.KeyWatch.reportSuspicious({reason:'script-added-key-event', snippet: txt.slice(0,240)});
+                } else if(/(fetch\(|XMLHttpRequest\(|navigator.sendBeacon\()/i.test(txt)){
+                  window.KeyWatch.reportSuspicious({reason:'script-added-network-call', snippet: txt.slice(0,240)});
+                }
+              }
+            });
+          }
+          if(m.type === 'attributes' && m.target){
+            for(const attr of Array.from(m.target.attributes || [])){
+              if(/^on(keydown|keyup|keypress)$/i.test(attr.name)){
+                window.KeyWatch.reportSuspicious({reason:'inline-onkey-attr', detail: m.target.tagName, snippet: attr.name + '="'+attr.value+'"'});
+              }
+            }
+          }
+        });
+      });
+      observer.observe(document.documentElement, {childList:true, subtree:true, attributes:true, attributeFilter:['onkeydown','onkeyup','onkeypress']});
+    }catch(e){ console.error('Observer init failed', e); }
+
+    try{
+      const _add = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function(type, fn, opts){
+        try{
+          if(/key(down|up|press)/i.test(type)){
+            const tname = (this && this.tagName) ? this.tagName : (this === document ? 'document' : 'object');
+            window.KeyWatch.reportSuspicious({reason:'addEventListener-key', detail: 'attached to ' + tname, snippet: 'listener for ' + type});
+          }
+        }catch(e){}
+        return _add.call(this, type, fn, opts);
+      };
+    }catch(e){ console.error('patch addEventListener failed', e); }
+
+    try{
+      const _fetch = window.fetch;
+      window.fetch = function(...args){
+        window.KeyWatch.reportSuspicious({reason:'fetch-called', detail: (args && args[0]) ? String(args[0]).slice(0,200) : 'fetch()'});
+        return _fetch.apply(this, args);
+      };
+      const _open = XMLHttpRequest.prototype.open;
+      const _send = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function(method, url){
+        this.__keywatch_url = url;
+        return _open.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function(body){
+        window.KeyWatch.reportSuspicious({reason:'xhr-send', detail: (this.__keywatch_url||'')});
+        return _send.apply(this, arguments);
+      };
+    }catch(e){ console.error('patch fetch/XHR failed', e); }
+
+    renderTimeline();
+  })();
+
+  // ---------- Safe simulated keylogger injection ----------
+  el('injectBtn').addEventListener('click', ()=>{
+    const script = document.createElement('script');
+    script.setAttribute('data-sim','keylog-sim');
+    script.textContent = `
+      (function(){
+        function onKey(e){
+          try{ window.simulatedKeyEventMarker && window.simulatedKeyEventMarker('SIMULATED_KEY_EVENT'); }catch(e){}
+        }
+        document.addEventListener('keydown', onKey, {passive:true});
+        document._simKeylog = { listener: onKey };
+      })();
+    `;
+    document.head.appendChild(script);
+    alert('Simulated keylogger injected (safe). Click any input or press keys to trigger simulated activity.');
+  });
+
+  window.simulatedKeyEventMarker = function(marker){
+    window.KeyWatch.reportSuspicious({reason:'simulated-network-after-key', snippet: marker});
+  };
+
+  // ---------- helpers ----------
+  el('clearBtn').addEventListener('click', ()=>{ if(confirm('Clear detection timeline?')){ localStorage.removeItem(TIMELINE_KEY); renderTimeline(); } });
+
+  // Run scan for target url set by search.html (if present)
+  async function tryAutoScan(){
+    const preset = localStorage.getItem('scan_target_url') || '';
+    if(preset){
+      targetUrlInput.value = preset;
+      // first try direct fetch (works for local or CORS-allowed)
+      try{
+        const html = await fetchHtml(preset, false);
+        await analyzeHtml(html, preset, false);
+      }catch(err){
+        // direct fetch likely blocked by CORS — show hint
+        scanningNote.textContent = 'Direct fetch failed (CORS). Use proxy button to fetch via your local proxy.';
+        console.warn('Direct fetch failed', err);
+      }
+    }else{
+      // No preset — run static scan against this page's inline scripts
+      runStaticScanThisPage();
+    }
+  }
+
+  // Run static scan on current page's scripts (inline/external; external may be blocked by CORS)
+  async function runStaticScanThisPage(){
+    const scripts = Array.from(document.scripts || []);
+    const results = [];
+    for(let i=0;i<scripts.length;i++){
+      const s = scripts[i];
+      const id = 's' + i + '_' + (s.src ? btoa(s.src).slice(0,8) : 'inline');
+      const url = s.src || null;
+      let text = '';
+      if(s.src){
+        try{
+          const r = await fetch(s.src, {mode:'cors'}).then(r=>r.ok ? r.text() : '');
+          text = r || '';
+        }catch(e){ text = ''; }
+      }else{
+        text = s.textContent || '';
+      }
+      const matches = [];
+      let score = 0;
+      STATIC_RULES.forEach(rule=>{
+        if(rule.re.test(text)){
+          matches.push(rule.label);
+          score += rule.weight;
+        }
+      });
+      results.push({id, url, name: s.tagName === 'SCRIPT' && !url ? 'inline-script' : url, matches, score: Math.min(100, score), snippet: text.slice(0,260)});
+    }
+    renderScripts(results);
+  }
+
+  // Event listeners for manual scan buttons
+  el('runScan').addEventListener('click', async ()=>{
+    const url = (targetUrlInput.value||'').trim();
+    if(!url){ alert('Enter a target URL or leave blank to scan this page'); return; }
+    try{
+      const html = await fetchHtml(url, false);
+      await analyzeHtml(html, url, false);
+    }catch(err){
+      alert('Direct fetch failed: ' + err + '\\nIf blocked by CORS, try "Run via proxy" (requires proxy server).');
+      scanningNote.textContent = 'Direct fetch failed. Try proxy if necessary.';
+    }
+  });
+
+  el('scanProxy').addEventListener('click', async ()=>{
+    const url = (targetUrlInput.value||'').trim();
+    if(!url){ alert('Enter a target URL'); return; }
+    try{
+      const html = await fetchHtml(url, true);
+      await analyzeHtml(html, url, true);
+    }catch(err){
+      alert('Proxy fetch failed: ' + err);
+    }
+  });
+
+  // Auto-run on load
+  window.addEventListener('load', ()=>{
+    // prefill from localStorage if set by search.html
+    const preset = localStorage.getItem('scan_target_url') || '';
+    if(preset) targetUrlInput.value = preset;
+    tryAutoScan();
+    renderTimeline();
+  });
+
+  // Mitigation helper (remove injected sim script)
+  window.KeyWatch = window.KeyWatch || {};
+  window.KeyWatch.mitigateInjected = function(){
+    const s = document.querySelector('script[data-sim="keylog-sim"]');
+    if(s){
+      try{
+        if(document._simKeylog && document._simKeylog.listener){
+          document.removeEventListener('keydown', document._simKeylog.listener);
+          delete document._simKeylog;
+        }
+      }catch(e){}
+      s.remove();
+      pushEvent({reason:'mitigation-removed-sim-script', detail:'removed simulated script', severity:'info'});
+      alert('Simulated script removed.');
+      renderTimeline();
+    }else{
+      alert('No simulated script found.');
+    }
+  };
+
+  // Expose small helpers for convenience
+  window.KeyWatch.showTimeline = ()=>console.log('KeyWatch timeline', readTimeline());
+  window.KeyWatch.clearTimeline = ()=>{ localStorage.removeItem(TIMELINE_KEY); renderTimeline(); };
+  </script>
+</body>
+</html>

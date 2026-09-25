@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Demo page — simulated keylogger</title>
+  <style>body{font-family:Arial,Helvetica;background:#f4f6f8;padding:32px} .box{max-width:680px;margin:0 auto;background:white;padding:18px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.06)}</style>
+</head>
+<body>
+  <div class="box">
+    <h2>Demo page (contains a simulated keylogger)</h2>
+    <p>This page intentionally contains a <strong>safe simulated</strong> keylogger so your scanner can detect it. It does <em>not</em> capture characters or send them anywhere.</p>
+
+    <label>Email: <input id="email" type="text" placeholder="test@example.com"></label><br><br>
+    <label>Password: <input id="pwd" type="password" placeholder="password"></label><br><br>
+    <p>Type in the inputs after you run the scanner to see detection in action.</p>
+  </div>
+
+  <script>
+  // === simulated keylogger (SAFE) ===
+  // This attaches a listener but does NOT read e.key or send characters out.
+  (function(){
+    function onKey(e){
+      // intentionally DO NOT read e.key or e.code
+      // instead call a safe marker function (no payload)
+      if(window && typeof window.simulatedKeyEventMarker === 'function'){
+        window.simulatedKeyEventMarker('SIM_MARK');
+      }
+    }
+    document.addEventListener('keydown', onKey, {passive:true});
+    // keep a handle so scanner can remove it (mitigation)
+    document._demo_sim = {listener: onKey};
+  })();
+  </script>
+</body>
+</html>

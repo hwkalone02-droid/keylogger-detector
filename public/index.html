@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Keylog Detector — Login / Sign Up</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#94a3b8;--accent:#7c3aed;--success:#10b981;--danger:#ef4444}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:linear-gradient(180deg,#071029 0%, #081425 60%);font-family:Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;color:#e6eef8}
+    .wrap{max-width:960px;margin:48px auto;padding:20px}
+    header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+    h1{font-size:20px;margin:0}
+    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border:1px solid rgba(255,255,255,0.04);backdrop-filter: blur(6px);padding:28px;border-radius:12px;display:grid;grid-template-columns:1fr 380px;gap:24px}
+    .left{padding:8px}
+    .brand{font-weight:700;color:var(--accent)}
+    .subtitle{color:var(--muted);margin-top:8px}
+    .form{background:rgba(255,255,255,0.02);padding:18px;border-radius:10px}
+    label{display:block;font-size:13px;margin-bottom:8px}
+    input[type=text],input[type=email],input[type=password]{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit;font-size:14px}
+    .row{display:flex;gap:8px}
+    .actions{margin-top:12px;display:flex;gap:8px}
+    button{border:0;padding:10px 14px;border-radius:8px;font-weight:600;cursor:pointer}
+    .btn-primary{background:linear-gradient(90deg,var(--accent),#5b21b6);color:white}
+    .btn-ghost{background:transparent;color:var(--accent);border:1px solid rgba(124,58,237,0.12)}
+    .muted{color:var(--muted);font-size:13px}
+    .toggle{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+    .small{font-size:13px}
+    .meter{height:8px;border-radius:8px;background:rgba(255,255,255,0.04);overflow:hidden;margin-top:8px}
+    .meter > i{display:block;height:100%;width:0%;background:linear-gradient(90deg,#ef4444,#f97316,#10b981)}
+    .right{padding:8px}
+    .panel{background:rgba(255,255,255,0.02);padding:14px;border-radius:10px}
+    .hint{font-size:13px;color:var(--muted);line-height:1.45}
+    .note{margin-top:12px;background:rgba(16,185,129,0.06);border:1px solid rgba(16,185,129,0.08);padding:10px;border-radius:8px;color:#bff3df}
+    .danger{background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.08);color:#ffd6d6}
+    .link{color:var(--accent);text-decoration:underline;cursor:pointer}
+    footer{margin-top:14px;color:var(--muted);font-size:13px}
+    @media (max-width:900px){.card{grid-template-columns:1fr;}.right{order:2}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <div class="brand">KeyWatch</div>
+        <div class="subtitle">Browser-based keylog detector — hackathon demo</div>
+      </div>
+      <div class="muted">Team: <strong>you</strong> · Tech: Static JS analysis + heuristics + runtime observer</div>
+    </header>
+
+    <main class="card" role="main">
+      <section class="left">
+        <h2 style="margin:0 0 8px 0">Sign in / Create account</h2>
+        <p class="muted">Use this single-file demo for quick prototyping. Data is stored locally (no backend) — swap storage calls for your API endpoints in <code>auth.js</code>.</p>
+
+        <div class="form" id="authForm">
+          <div class="toggle">
+            <label class="small">Mode:</label>
+            <select id="modeSelect" aria-label="Mode select">
+              <option value="login">Login</option>
+              <option value="signup">Create account</option>
+            </select>
+            <div style="margin-left:auto" class="muted small">Password strength & validation included</div>
+          </div>
+
+          <form id="form" autocomplete="on">
+            <div style="margin-bottom:12px">
+              <label for="email">Email</label>
+              <input id="email" type="email" name="email" placeholder="you@example.com" required />
+            </div>
+
+            <div style="margin-bottom:12px">
+              <label for="username">Username <span class="muted small">(signup only)</span></label>
+              <input id="username" type="text" name="username" placeholder="johndoe" />
+            </div>
+
+            <div style="margin-bottom:6px">
+              <label for="password">Password</label>
+              <div class="row">
+                <input id="password" type="password" name="password" placeholder="••••••••" autocomplete="new-password" required />
+                <button type="button" id="togglePwd" class="btn-ghost">Show</button>
+              </div>
+              <div class="meter" aria-hidden><i id="strengthBar"></i></div>
+              <div id="pwdHint" class="muted small">Min 8 chars. Use letters & numbers.</div>
+            </div>
+
+            <div class="actions">
+              <button id="submitBtn" class="btn-primary" type="submit">Sign in</button>
+              <button id="demoFill" type="button" class="btn-ghost">Demo fill</button>
+            </div>
+
+            <div id="msg" role="alert" style="margin-top:12px"></div>
+          </form>
+        </div>
+
+        <footer>
+          <div class="muted">Tip: Hook the runtime detector using <code>window.KeyWatch</code> (see comments in the code).</div>
+        </footer>
+      </section>
+
+      <aside class="right">
+        <div class="panel">
+          <h3 style="margin-top:0">About this demo</h3>
+          <p class="hint">This mock auth UI is lightweight and suitable for pairing with your static JS analyzer and runtime mutation-observer detector. For the hackathon, focus on:</p>
+          <ul class="muted">
+            <li>Static scan of loaded JS bundles to find keystroke-listening patterns.</li>
+            <li>Runtime detector: observe DOM for injected listeners / unusual event handlers.</li>
+            <li>Display scan results in a separate scanner UI (we can add that next).</li>
+          </ul>
+
+          <div class="note"><strong>Integration point:</strong> replace the <code>mockAuth</code> functions with real API calls. Expose <code>window.KeyWatch.reportSuspicious()</code> to send runtime detections to the scanner view.</div>
+
+          <div style="margin-top:12px" class="danger"><strong>Security reminder:</strong> This demo stores credentials in localStorage for convenience only. Do not use as-is in production.</div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <script>
+    const modeSelect = document.getElementById('modeSelect');
+    const submitBtn = document.getElementById('submitBtn');
+    const form = document.getElementById('form');
+    const msg = document.getElementById('msg');
+    const username = document.getElementById('username');
+    const email = document.getElementById('email');
+    const password = document.getElementById('password');
+    const strengthBar = document.getElementById('strengthBar');
+    const togglePwd = document.getElementById('togglePwd');
+    const demoFill = document.getElementById('demoFill');
+
+    function calcStrength(pwd){
+      let score = 0;
+      if(pwd.length >= 8) score += 1;
+      if(/[A-Z]/.test(pwd)) score += 1;
+      if(/[0-9]/.test(pwd)) score += 1;
+      if(/[^A-Za-z0-9]/.test(pwd)) score += 1;
+      return Math.min(4, score);
+    }
+
+    function updateStrength(){
+      const s = calcStrength(password.value);
+      const pct = (s / 4) * 100;
+      strengthBar.style.width = pct + '%';
+    }
+
+    password.addEventListener('input', updateStrength);
+
+    togglePwd.addEventListener('click', ()=>{ 
+      if(password.type === 'password'){ password.type = 'text'; togglePwd.textContent='Hide'; }
+      else { password.type = 'password'; togglePwd.textContent='Show'; }
+    });
+
+    modeSelect.addEventListener('change', ()=>{ 
+      const mode = modeSelect.value;
+      if(mode === 'login'){
+        username.parentElement.style.display = 'block'; 
+        submitBtn.textContent = 'Sign in';
+      } else {
+        submitBtn.textContent = 'Create account';
+      }
+      msg.textContent='';
+    });
+
+    demoFill.addEventListener('click', ()=>{ 
+      email.value = 'alice@example.com';
+      username.value = 'alice';
+      password.value = 'DemoPass123!';
+      updateStrength();
+    });
+
+    const DB_KEY = 'keywatch_users_v1';
+    function readDB(){ try{ return JSON.parse(localStorage.getItem(DB_KEY) || '{}'); }catch(e){return{}} }
+    function writeDB(db){ localStorage.setItem(DB_KEY, JSON.stringify(db)); }
+
+    function showMessage(text, type=''){
+      msg.textContent = text;
+      if(type === 'error'){ msg.style.color = 'var(--danger)'; }
+      else if(type === 'success'){ msg.style.color = 'var(--success)'; }
+      else msg.style.color = 'var(--muted)';
+    }
+
+    form.addEventListener('submit', (ev)=>{ 
+      ev.preventDefault();
+      const mode = modeSelect.value;
+      const em = email.value.trim().toLowerCase();
+      const user = username.value.trim();
+      const pwd = password.value;
+
+      if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(em)) return showMessage('Enter a valid email', 'error');
+      if(pwd.length < 8) return showMessage('Password too short', 'error');
+
+      const db = readDB();
+      if(mode === 'signup'){
+        if(db[em]) return showMessage('Account already exists for this email', 'error');
+        db[em] = {username: user || em.split('@')[0], password: pwd, createdAt: Date.now()};
+        writeDB(db);
+        localStorage.setItem('current_user', em);
+        showMessage('Account created successfully! Redirecting...', 'success');
+        setTimeout(()=>{
+          window.location.href = 'http://localhost:3000/search.html';
+        }, 800);
+      } else {
+        if(!db[em] || db[em].password !== pwd) return showMessage('Invalid credentials', 'error');
+        localStorage.setItem('current_user', em);
+        showMessage('Signed in successfully — welcome, ' + (db[em].username || 'user') + '!', 'success');
+        setTimeout(()=>{
+          window.location.href = 'http://localhost:3000/search.html';
+        }, 800);
+      }
+    });
+
+    // detector hook
+    window.KeyWatch = window.KeyWatch || {};
+    window.KeyWatch.reportSuspicious = function(details){
+      console.warn('Suspicious reported:', details);
+      const timeline = JSON.parse(localStorage.getItem('keywatch_timeline_v1') || '[]');
+      timeline.unshift({ts:Date.now(), details});
+      localStorage.setItem('keywatch_timeline_v1', JSON.stringify(timeline));
+      showMessage('Suspicious behavior detected (check console & timeline)', 'error');
+    };
+  </script>
+</body>
+</html>

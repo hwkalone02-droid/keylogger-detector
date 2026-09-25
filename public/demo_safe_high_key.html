@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Demo — Safe pattern (high heuristic)</title>
+  <style>body{font-family:Arial;padding:24px;background:#f7fbff} .card{max-width:700px;margin:0 auto;background:#fff;padding:18px;border-radius:8px;box-shadow:0 6px 20px rgba(0,0,0,0.06)}</style>
+</head>
+<body>
+  <div class="card">
+    <h2>Safe demo — high heuristic tokens</h2>
+    <p>This page simulates suspicious patterns (keyboard hook + tokens). <strong>No keys are read or sent.</strong></p>
+
+    <label>Input: <input id="i1" type="text" placeholder="type here"></label>
+  </div>
+
+  <script>
+    // runtime: attach key listener but DO NOT read e.key or e.code
+    (function(){
+      function onKey(e){
+        // SAFE MARKER — do not read e.key
+        if(window && typeof window.simulatedKeyEventMarker === 'function'){
+          window.simulatedKeyEventMarker('demo1-keyhook');
+        }
+      }
+      document.addEventListener('keydown', onKey, {passive:true});
+      // keep handle for possible mitigation
+      document._demo1 = {listener:onKey};
+    })();
+
+    // static tokens that static scanners often flag (present only as strings / comments)
+    // These are intentionally non-executed examples to trigger static rule matches:
+    // "keyCode", "eval(", "new Function("
+    const STATIC_TOKENS = "keyCode eval( new Function(";
+    // fake obfuscated-looking string (not executed)
+    const obf = "/* obf: d3adbeef */ 'eval(' + '/*' + 'key' + '*/'";
+
+    // a harmless no-op network helper (does nothing)
+    function sendToServerFake(payload){
+      // intentionally no network call performed — safe for demo
+      return;
+    }
+  </script>
+</body>
+</html>

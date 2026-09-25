@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>KeyWatch — Scanner (moderated scoring)</title>
+  <style>
+    body{font-family:Inter,system-ui,Arial;background:#071428;color:#e6eef8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
+    .card{width:920px;background:linear-gradient(180deg,#071b2b,#061424);padding:18px;border-radius:10px;border:1px solid rgba(255,255,255,0.04)}
+    input{width:640px;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit}
+    button{padding:10px 14px;border-radius:8px;border:0;background:#7c3aed;color:white;margin-left:8px;cursor:pointer}
+    .muted{color:#9fb0c8;font-size:13px}
+    .results{margin-top:14px;padding:12px;border-radius:8px;background:rgba(255,255,255,0.01);max-height:420px;overflow:auto}
+    .script{padding:8px;border-radius:6px;margin-bottom:8px;background:rgba(255,255,255,0.02)}
+    .bad{color:#ef4444;font-weight:700}
+    .warn{color:#f59e0b;font-weight:700}
+    .good{color:#10b981;font-weight:700}
+    .small{font-size:13px;color:#9fb0c8}
+    code{background:rgba(255,255,255,0.02);padding:2px 6px;border-radius:4px}
+    .topbar{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="topbar">
+      <h2 style="margin:0">KeyWatch — Scanner</h2>
+      <div class="muted small" id="serverHint">Proxy: <code id="proxyUrl">/proxy</code></div>
+    </div>
+
+    <div>
+      <input id="urlInput" placeholder="Paste any URL (e.g. https://example.com or /demo_safe1.html)" />
+      <button id="scanBtn">Scan</button>
+      <button id="scanProxyBtn" style="background:#2c7; color:#012">Scan via proxy</button>
+    </div>
+
+    <div id="results" class="results"></div>
+    <div id="hint" class="small muted" style="margin-top:8px"></div>
+  </div>
+
+<script>
+/* ---------- Moderated scoring scanner (robust) ---------- */
+
+/* Tuning constants */
+const STATIC_RULES = [
+  { id: 'key-listener', label: "key event token", re: /(addEventListener\s*\(\s*['"]key(down|up|press)['"]|onkeydown\s*=|onkeypress\s*=)/i, weight: 8 },
+  { id: 'key-props',    label: "key property",    re: /(keyCode|which|e\.key)/i, weight: 6 },
+  { id: 'network',      label: "network call",     re: /(fetch\s*\(|XMLHttpRequest\s*\(|navigator\.sendBeacon\()/i, weight: 7 },
+  { id: 'eval',         label: "dynamic eval",     re: /(eval\s*\(|new Function\()/i, weight: 9 }
+];
+
+const KNOWN_LIB_PATTERNS = [/jquery/i, /react/i, /vue/i, /bootstrap/i];
+const LIB_DAMPEN_FACTOR = 0.25;
+const KEY_NET_BOOST = 1.5;
+const MAX_SCRIPT_SCORE = 100;
+
+const resultsEl = document.getElementById('results');
+const hintEl = document.getElementById('hint');
+const scanBtn = document.getElementById('scanBtn');
+const scanProxyBtn = document.getElementById('scanProxyBtn');
+const proxyUrlEl = document.getElementById('proxyUrl');
+
+const PROXY_BASE = (window.PROXY_BASE || ''); // you can set window.PROXY_BASE before this script if needed
+proxyUrlEl.textContent = PROXY_BASE + '/proxy';
+
+/* Event handlers */
+scanBtn.addEventListener('click', ()=>startScan(false));
+scanProxyBtn.addEventListener('click', ()=>startScan(true));
+
+/* Start */
+async function startScan(useProxy){
+  const raw = document.getElementById('urlInput').value.trim();
+  if(!raw){ alert('Enter a URL'); return; }
+  resultsEl.innerHTML = `<div class="small">Fetching ${escapeHtml(raw)} ...</div>`;
+  hintEl.textContent = '';
+
+  let url;
+  try { url = new URL(raw, window.location.href).href; }
+  catch(e){ resultsEl.innerHTML = `<div class="bad">Invalid URL</div>`; return; }
+
+  try {
+    const html = await fetchHtml(url, useProxy);
+    await analyzeHtml(html, url, useProxy);
+  } catch (err) {
+    console.error('Fetch error', err);
+    resultsEl.innerHTML = `<div class="bad">Fetch failed: ${escapeHtml(String(err))}</div>`;
+    if(!useProxy) hintEl.innerHTML = 'If blocked by CORS, try "Scan via proxy" (ensure server is running).';
+  }
+}
+
+/* Fetch helper: uses proxy when asked */
+async function fetchHtml(url, useProxy){
+  if(useProxy){
+    const endpoint = (PROXY_BASE || '') + '/proxy?url=' + encodeURIComponent(url);
+    // ensure absolute (if PROXY_BASE blank, '/proxy' will be same origin)
+    const r = await fetch(endpoint);
+    if(!r.ok) throw new Error('Proxy fetch failed: ' + r.status);
+    return await r.text();
+  } else {
+    const r = await fetch(url, {mode:'cors'});
+    if(!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.text();
+  }
+}
+
+/* Parse <script> nodes */
+function getScriptNodesFromHtml(html){
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+  const scripts = Array.from(doc.querySelectorAll('script'));
+  return scripts.map((s,i)=>({
+    id: 's'+i,
+    src: s.src || null,
+    inline: !s.src,
+    text: s.textContent || ''
+  }));
+}
+
+function isKnownLib(src){
+  if(!src) return false;
+  return KNOWN_LIB_PATTERNS.some(p => p.test(src));
+}
+
+/* Analysis + moderated scoring (same logic as provided earlier, but robust) */
+async function analyzeHtml(html, baseUrl, usedProxy){
+  resultsEl.innerHTML = '';
+  const scripts = getScriptNodesFromHtml(html);
+
+  // Page-level
+  let pageRaw = 0;
+  STATIC_RULES.forEach(rule => { if(rule.re.test(html)) pageRaw += rule.weight; });
+  const totalRuleWeight = STATIC_RULES.reduce((s,r)=>s+r.weight, 0);
+  const pageLevelScore = Math.round(Math.min(1, pageRaw / totalRuleWeight) * 100);
+
+  // Scripts
+  const perScriptResults = [];
+  for(const s of scripts){
+    let text = s.text || '';
+    if(s.src){
+      try{
+        const resolved = new URL(s.src, baseUrl).href;
+        if(usedProxy){
+          const r = await fetch((PROXY_BASE || '') + '/proxy?url=' + encodeURIComponent(resolved));
+          if(r.ok) text = await r.text();
+        } else {
+          const r = await fetch(resolved, {mode:'cors'});
+          if(r.ok) text = await r.text();
+        }
+      }catch(e){
+        text = ''; // cannot fetch external script (CORS or network)
+      }
+    }
+
+    let rawScore = 0;
+    const matches = [];
+    STATIC_RULES.forEach(rule => {
+      if(rule.re.test(text || '') || (s.inline && rule.re.test(s.text || ''))){
+        matches.push(rule.label);
+        rawScore += rule.weight;
+      }
+    });
+
+    let damp = isKnownLib(s.src) ? LIB_DAMPEN_FACTOR : 1;
+    const hasKey = matches.some(m => /key/i.test(m));
+    const hasNet = matches.some(m => /network|network call/i.test(m)) || /fetch|XMLHttpRequest|sendBeacon/i.test((text||''));
+    let score = rawScore * damp;
+    if(hasKey && hasNet) score *= KEY_NET_BOOST;
+    const normalized = Math.round(Math.min(1, score / totalRuleWeight) * MAX_SCRIPT_SCORE);
+
+    perScriptResults.push({ id: s.id, src: s.src, inline: s.inline, matches, rawScore, normalized, snippet: (text||'').slice(0,340) });
+  }
+
+  const avgScriptScore = perScriptResults.length ? Math.round(perScriptResults.reduce((a,b)=>a+b.normalized,0) / perScriptResults.length) : 0;
+  const finalPageScore = Math.round((pageLevelScore + avgScriptScore) / 2);
+
+  // render
+  const header = document.createElement('div');
+  header.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
+    <div><strong>Scanned:</strong> ${escapeHtml(baseUrl)} ${usedProxy?'<span class="small"> (via proxy)</span>':''}</div>
+    <div><strong>Page heuristic score:</strong> <span class="${classForScore(finalPageScore)}">${finalPageScore}</span></div>
+  </div><hr style="opacity:.06">`;
+  resultsEl.appendChild(header);
+
+  if(pageLevelScore > 0){
+    const p = document.createElement('div'); p.className='script';
+    p.innerHTML = `<div><strong>Page-level matches</strong> — score ${pageLevelScore}</div>`;
+    resultsEl.appendChild(p);
+  }
+
+  if(perScriptResults.length === 0){
+    const none = document.createElement('div'); none.className='small muted'; none.textContent='No <script> tags found on the page.'; resultsEl.appendChild(none);
+  } else {
+    perScriptResults.forEach(r => {
+      const el = document.createElement('div'); el.className='script';
+      el.innerHTML = `<div style="display:flex;justify-content:space-between;align-items:center">
+        <div><strong>${r.src ? escapeHtml(r.src) : '[inline script]'}</strong> ${r.inline?'<span class="small muted">inline</span>':''}</div>
+        <div><span class="${classForScore(r.normalized)}">${r.normalized}</span></div>
+      </div>
+      <div class="small" style="margin-top:6px">Matches: ${r.matches.length ? escapeHtml(r.matches.join(', ')) : '<span class="small muted">none</span>'}</div>
+      <div class="small mono" style="margin-top:6px">${escapeHtml(r.snippet)}</div>`;
+      resultsEl.appendChild(el);
+    });
+  }
+
+  if(!usedProxy){
+    const maybeBlocked = scripts.some(s => s.src && !s.textContent);
+    if(maybeBlocked){
+      const note = document.createElement('div'); note.className='small muted';
+      note.innerHTML = 'Some external scripts could not be fetched due to CORS. Use the proxy if you need to scan remote sites.';
+      resultsEl.appendChild(note);
+    }
+  }
+}
+
+function classForScore(score){ if(score >= 75) return 'bad'; if(score >= 40) return 'warn'; return 'good'; }
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+/* Helpful console health-check */
+console.info('KeyWatch scanner loaded. PROXY_BASE:', PROXY_BASE || '(using same origin "/proxy")');
+</script>
+</body>
+</html>
